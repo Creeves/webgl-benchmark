@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+ <head>
+    <meta name="description" content="Live code" />
+    <meta charset=utf-8 />
+    <title>WebCLGL 2.0 Benchmarks</title> 
+    <link href="http:	//maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap.min.css" rel="stylesheet">
+   
+   	<script src="http://rawgithub.com/3DRoberto/webclgl/master/WebCLGLUtils.class.js"></script>
+    <script src="http://rawgithub.com/3DRoberto/webclgl/master/WebCLGLBuffer.class.js"></script>
+    <script src="http://rawgithub.com/3DRoberto/webclgl/master/WebCLGLKernel.class.js"></script>
+   	<script src="http://rawgithub.com/3DRoberto/webclgl/master/WebCLGL.class.js"></script>
+   	<script src="https://code.jquery.com/jquery-2.1.3.js"></script>
+   	<script src="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/js/bootstrap.min.js"></script>
+  </head>
+  <body style="background-color:#FFF">
+		<table id="resultTable" class="table table-bordered">
+		<tr><th>Power</th><th>Total Length</th><th>CPU Time</th><th>Worker Time</th><th>Worker Speedup<th>GPU Time</th><th>GPU Speedup</th></tr>
+		</table>
+		<script id="worker1" type="javascript/worker">
+		self.onmessage = function(e) {
+				var float32View_A = new Float32Array(e.data.split_A),
+				    float32View_B = new Float32Array(e.data.split_B),
+				    output = [],
+				    result = 0,
+				    len = float32View_A.length - 1;
+				for (var i = 0; i < float32View_A.length; i++) {
+					for(var nB=0; nB<10000; nB++) {
+						result = Math.sqrt(result + float32View_A[i] + float32View_B[i] + nB);
+					}
+					output[i] = result;
+				}
+				var float32View_output = new Float32Array(output.length);
+				float32View_output.set(output);
+			    self.postMessage({output: float32View_output.buffer, id: e.data.id}, [float32View_output.buffer]); 
+		    };
+		</script>
+		<script>	
+			// FILL ARRAYS A AND B
+			function runTest(pow, max_pow) {
+				var _length = Math.pow(2, pow),
+				    A = [],
+				    B = [],
+				    cpuTime,
+				    workerTime,
+				    gpuTime;
+				console.log("Testing length 2^" + "4 = " + _length);
+				fillArrays = function(pow0) {
+					for(var n = 0; n < _length; n++) {
+						var randA = Math.random()/2.0;
+						A.push(randA);
+						var randB = Math.random()/2.0;
+						B.push(randB);
+					}
+					
+					setTimeout(function(){performCPU(pow0);}, 300);
+				};
+				
+				
+				performCPU = function(pow1) {
+					var C_CPU = [];
+
+					var dat = new Date().getTime();
+
+					var result = 0;
+					for(var n = 0; n < _length; n++) {
+						for(var nB=0; nB<10000; nB++) result = Math.sqrt(result+A[n]+B[n]+nB);
+						C_CPU[n] = result;
+					}
+
+					console.log("CPU single thread time: ", (new Date().getTime()-dat)+'ms');
+					cpuTime = (new Date().getTime()-dat);
+					setTimeout(function(){performWorker(pow1);}, 300);
+				};
+			
+
+				performWorker = function(pow2) {
+					// Initialise the worker 
+	    			var blob = new Blob([document.querySelector('#worker1').textContent]),
+		    			split_A = [],
+		    			split_B = [],
+		    			numCores = navigator.hardwareConcurrency || 4,
+		    			workers = [],
+		    			outputs = [],
+		    			joined_output = [],
+		    			response_count = 0;
+		    			
+
+	    			for (var i = 0; i < numCores; i++) {
+	    				split_A.push([]);
+	    				split_B.push([]);
+	    			}
+
+	    			for (var i = 0; i < _length; i++) {
+	    				split_A[i % numCores].push(A[i]);
+	    				split_B[i % numCores].push(B[i]);
+	    			}
+	    			// console.log(split_A, split_B);
+	    			var dat = new Date().getTime();
+	    			for (var i = 0; i < numCores; i++) {
+		    			// var arrayBuffer = new ArrayBuffer(split_A[i].length);
+						var float32View_A = new Float32Array(split_A[i].length),
+							float32View_B = new Float32Array(split_B[i].length);
+		                // if (typeof Float32Array.from == "function") {
+						// 	float32View_A = Float32Array.from(split_A[i]);
+						// 	float32View_B = Float32Array.from(split_B[i]);
+						// 	console.log('no .from ', float32View_A);
+						// 	console.log('with .from ', Float32Array.from(split_A[i]));
+						// } else {
+						// 	for (var n = 0; n < split_A[i].length; ++n) {
+						// 		float32View_A[n] = split_A[i][n];
+						// 		float32View_B[n] = split_B[i][n];
+						// 	}
+						// }
+						// originalLength = uInt8View.length;
+						float32View_A.set(split_A[i]);
+						float32View_B.set(split_B[i]);
+						// console.log('no .from ', float32View_A.length);
+						// console.log('with .from ', Float32Array.from(split_A[i]));
+
+						var worker = new Worker(window.URL.createObjectURL(blob));
+						workers.push(worker);
+
+						worker.onmessage = function(e) {
+							response_count += 1;
+							var float32View = new Float32Array(e.data.output);
+							outputs[e.data.id] = float32View;
+
+							if (response_count == numCores) {
+								var offset = -1;
+								for (var n = 0; n < _length; n++) {
+									if (n % numCores == 0) {
+										offset += 1;
+									}
+									joined_output.push(outputs[n % numCores][offset]);
+								}
+								// console.log("CPU worker array: ", joined_output);
+								console.log('Total web worker time: ', (new Date().getTime()-dat)+'ms');
+								workerTime = (new Date().getTime()-dat);
+								setTimeout(function(){performGPU(pow2);}, 300);
+							}
+					    }
+					   
+						// console.log(float32View_A);
+
+				    	worker.postMessage({id: i, split_A: float32View_A.buffer, split_B: float32View_B.buffer}, [float32View_A.buffer, float32View_B.buffer]); 
+	    			}
+
+				};
+				
+				performGPU = function(pow3) {
+					webCLGL = new WebCLGL();
+					var offset = 150; // to handle values from -150.0 to 150.0
+					var buffer_A = webCLGL.createBuffer(_length, "FLOAT", offset);
+					var buffer_B = webCLGL.createBuffer(_length, "FLOAT", offset);
+					var buffer_C = webCLGL.createBuffer(_length, "FLOAT", offset);
+					webCLGL.enqueueWriteBuffer(buffer_A, A);
+					webCLGL.enqueueWriteBuffer(buffer_B, B);
+
+					var kernel_add_source = 'void main(	float* A,'+
+														'float* B,'+
+														'float num) {'+
+							'vec2 n = get_global_id();'+
+							'float result = 0.0;'+
+							'for(int nB=0; nB < 10000; nB++) result = sqrt(result+A[n]+B[n]+float(nB));'+
+							'out_float = result;'+
+						'}';
+					var kernel_add = webCLGL.createKernel(kernel_add_source);
+					kernel_add.setKernelArg(0, buffer_A);
+					kernel_add.setKernelArg(1, buffer_B);
+					kernel_add.setKernelArg(2, 0.01);
+					kernel_add.compile();
+
+					dat = new Date().getTime();
+					webCLGL.enqueueNDRangeKernel(kernel_add, buffer_C); // First execution: compile and exec; Last executions: only exec
+					var C_GPU = webCLGL.enqueueReadBuffer_Float(buffer_C);
+
+
+					// console.log("GPU array: ", C_GPU);
+					console.log("GPU time: ", (new Date().getTime()-dat)+'ms');
+					gpuTime = (new Date().getTime()-dat);
+					console.log("Using 2^" + pow3 + " = " + _length, "Worker time: " + workerTime, "GPU time: " + gpuTime, "Speedup: " + workerTime / gpuTime);
+					$('#resultTable').append('<tr><td>' + pow3 + '</td><td>' + _length + '</td><td>' + cpuTime + '</td><td>' + workerTime + '</td><td>' + cpuTime / workerTime + '</td><td>' + gpuTime + '</td><td>' + workerTime / gpuTime + '</td></tr>');
+					if (pow3 < max_pow) {
+						setTimeout(function(){runTest(pow3 + 1, max_pow);}, 300);
+					}
+				};
+				
+				setTimeout(function(){fillArrays(pow);}, 300);
+			}
+		</script>
+	</body>
+</html>
